@@ -55,9 +55,9 @@ defmodule Jido.Chat.Mattermost.MixProject do
 
   defp deps do
     [
-      {:jido_chat, github: "agentjido/jido_chat", branch: "main"},
+      {:jido_chat, "~> 1.0"},
       {:req, "~> 0.5"},
-      {:fresh, "~> 0.4"},
+      {:fresh, github: "agentjido/fresh", ref: "8cb7bd05478d3ddbd4fd1939ac202b3a3393fc33", override: true},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
