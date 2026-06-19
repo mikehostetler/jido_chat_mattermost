@@ -52,9 +52,105 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
                Jason.decode(json)
     end
 
-    test "returns state unchanged" do
+    test "marks auth as pending" do
       {:reply, _frames, state} = Client.handle_connect(101, [], @base_state)
-      assert state == @base_state
+
+      assert state.auth_status == :pending
+    end
+  end
+
+  # ── handle_in/2 — auth responses ─────────────────────────────────────
+
+  describe "handle_in/2 auth responses" do
+    test "marks authentication success" do
+      frame = {:text, Jason.encode!(%{"seq_reply" => 1, "status" => "OK"})}
+
+      assert {:ok, state} = Client.handle_in(frame, @base_state)
+      assert state.auth_status == :ok
+    end
+
+    test "crashes on authentication failure" do
+      reason = %{"message" => "invalid token"}
+      frame = {:text, Jason.encode!(%{"seq_reply" => 1, "status" => "FAIL", "error" => reason})}
+
+      assert catch_exit(Client.handle_in(frame, @base_state)) == {:auth_failed, reason}
+    end
+
+    test "posted event success marks auth as fallback" do
+      frame = posted_frame(%{"user_id" => "other-user"})
+
+      assert {:ok, state} = Client.handle_in(frame, @base_state)
+      assert state.auth_status == :ok
+    end
+  end
+
+  # ── handle_error/2 ───────────────────────────────────────────────────
+
+  describe "handle_error/2" do
+    test "closes with a standardized transport error reason" do
+      error = {:streaming_failed, :closed}
+
+      assert {:close, {:transport_failed, ^error}} = Client.handle_error(error, @base_state)
+    end
+  end
+
+  # ── handle_info/2 — auth status requests ─────────────────────────────
+
+  describe "handle_info/2 auth status requests" do
+    test "replies with the current auth status" do
+      ref = make_ref()
+      state = Map.put(@base_state, :auth_status, :pending)
+
+      assert {:ok, ^state} = Client.handle_info({:auth_status, self(), ref}, state)
+      assert_receive {^ref, :pending}
+    end
+
+    test "replies with :unknown when auth status is absent" do
+      assert {:ok, @base_state} = Client.handle_info({:auth_status, self()}, @base_state)
+      assert_receive {:auth_status, :unknown}
+    end
+
+    test "ignores unrelated process messages" do
+      assert {:ok, @base_state} = Client.handle_info(:unrelated, @base_state)
+    end
+  end
+
+  # ── auth_status/2 ────────────────────────────────────────────────────
+
+  describe "auth_status/2" do
+    test "requests auth status from a websocket process" do
+      pid =
+        spawn(fn ->
+          receive do
+            {:auth_status, from, ref} -> send(from, {ref, :ok})
+          end
+        end)
+
+      assert {:ok, :ok} = Client.auth_status(pid)
+    end
+
+    test "returns standardized process exit reasons" do
+      pid =
+        spawn(fn ->
+          receive do
+            {:auth_status, _from, _ref} -> exit({:auth_failed, :invalid_token})
+          end
+        end)
+
+      assert {:error, {:auth_failed, :invalid_token}} = Client.auth_status(pid)
+    end
+
+    test "returns timeout when the process does not reply" do
+      pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert {:error, :timeout} = Client.auth_status(pid, 1)
+
+      send(pid, :stop)
     end
   end
 
