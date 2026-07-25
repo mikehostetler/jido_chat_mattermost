@@ -21,6 +21,43 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
 
   def sink_raise(_payload, _opts), do: raise("sink called")
 
+  defp capturing_sink_state do
+    Map.put(@base_state, :sink_mfa, {__MODULE__, :sink_capture, []})
+  end
+
+  def sink_capture(payload, opts) do
+    send(self(), {:sink_called, payload, opts})
+    :ok
+  end
+
+  defp reaction_frame(event_name, reaction_attrs \\ %{}, overrides \\ %{}) do
+    reaction =
+      Map.merge(
+        %{
+          "user_id" => "user-123",
+          "post_id" => "post-1",
+          "emoji_name" => "thumbsup",
+          "create_at" => 1_700_000_000
+        },
+        reaction_attrs
+      )
+
+    event =
+      Map.merge(
+        %{
+          "event" => event_name,
+          "data" => %{
+            "reaction" => Jason.encode!(reaction),
+            "channel_type" => "D"
+          },
+          "broadcast" => %{"channel_id" => "chan-abc"}
+        },
+        overrides
+      )
+
+    {:text, Jason.encode!(event)}
+  end
+
   defp posted_frame(post_attrs) do
     post =
       Map.merge(
@@ -182,6 +219,113 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
 
     test "ignores binary frames" do
       assert {:ok, @base_state} = Client.handle_in({:binary, <<0, 1, 2>>}, @base_state)
+    end
+  end
+
+  # ── handle_in/2 — reaction events ────────────────────────────────────
+
+  describe "handle_in/2 reaction events" do
+    test "dispatches reaction_added as a normalized reaction envelope" do
+      frame = reaction_frame("reaction_added")
+
+      assert {:ok, state} = Client.handle_in(frame, capturing_sink_state())
+      assert state.auth_status == :ok
+
+      assert_received {:sink_called, %Jido.Chat.EventEnvelope{} = envelope, opts}
+      assert envelope.event_type == :reaction
+      assert envelope.adapter_name == :mattermost
+      assert envelope.channel_id == "chan-abc"
+      assert envelope.message_id == "post-1"
+      assert envelope.thread_id == "mattermost:chan-abc"
+      assert opts[:transport] == "websocket"
+
+      assert %{emoji: "thumbsup", added: true, user: %{user_id: "user-123"}} = envelope.payload
+    end
+
+    test "marks reaction_removed as not added" do
+      frame = reaction_frame("reaction_removed")
+
+      assert {:ok, _state} = Client.handle_in(frame, capturing_sink_state())
+
+      assert_received {:sink_called, envelope, _opts}
+      assert envelope.payload.added == false
+      assert envelope.metadata.ws_event == "reaction_removed"
+    end
+
+    test "carries the emoji name through unchanged" do
+      frame = reaction_frame("reaction_added", %{"emoji_name" => "thumbsdown"})
+
+      assert {:ok, _state} = Client.handle_in(frame, capturing_sink_state())
+
+      assert_received {:sink_called, envelope, _opts}
+      assert envelope.payload.emoji == "thumbsdown"
+    end
+
+    test "filters out the bot's own reactions" do
+      frame = reaction_frame("reaction_added", %{"user_id" => "bot-uid"})
+
+      assert {:ok, _state} = Client.handle_in(frame, capturing_sink_state())
+
+      refute_received {:sink_called, _payload, _opts}
+    end
+
+    test "filters out reactions from untracked channels" do
+      state =
+        capturing_sink_state()
+        |> Map.put(:channel_ids, ["tracked-chan"])
+
+      frame =
+        reaction_frame("reaction_added", %{}, %{
+          "data" => %{
+            "reaction" =>
+              Jason.encode!(%{
+                "user_id" => "user-123",
+                "post_id" => "post-1",
+                "emoji_name" => "thumbsup"
+              }),
+            "channel_type" => "O"
+          },
+          "broadcast" => %{"channel_id" => "other-chan"}
+        })
+
+      assert {:ok, _state} = Client.handle_in(frame, state)
+
+      refute_received {:sink_called, _payload, _opts}
+    end
+
+    test "always tracks reactions in DM channels" do
+      state = Map.put(capturing_sink_state(), :channel_ids, ["tracked-chan"])
+      frame = reaction_frame("reaction_added")
+
+      assert {:ok, _state} = Client.handle_in(frame, state)
+
+      assert_received {:sink_called, _envelope, _opts}
+    end
+
+    test "does not crash when the reaction field is not double-encoded JSON" do
+      event = %{
+        "event" => "reaction_added",
+        "data" => %{"reaction" => %{"not" => "a string"}},
+        "broadcast" => %{"channel_id" => "chan-abc"}
+      }
+
+      assert {:ok, _state} = Client.handle_in({:text, Jason.encode!(event)}, capturing_sink_state())
+
+      assert_received {:sink_called, envelope, _opts}
+      assert envelope.payload.emoji == nil
+    end
+
+    test "does not crash when the reaction payload is missing" do
+      event = %{"event" => "reaction_added", "data" => %{}}
+
+      assert {:ok, @base_state} =
+               Client.handle_in({:text, Jason.encode!(event)}, @base_state)
+    end
+
+    test "does not crash when the broadcast channel is missing" do
+      frame = reaction_frame("reaction_added", %{}, %{"broadcast" => %{}})
+
+      assert {:ok, _state} = Client.handle_in(frame, capturing_sink_state())
     end
   end
 
