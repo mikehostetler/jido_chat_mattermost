@@ -392,17 +392,23 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(file) when is_map(file) do
+    url = map_get(file, ["link", :link, "permalink", :permalink])
+    filename = map_get(file, ["name", :name])
+    extension = map_get(file, ["extension", :extension])
+    media_type = file |> map_get(["mime_type", :mime_type]) |> normalize_media_type()
+
     Media.new(%{
-      url: map_get(file, ["link", :link, "permalink", :permalink]),
-      filename: map_get(file, ["name", :name]),
-      media_type: map_get(file, ["mime_type", :mime_type]),
+      kind: mattermost_media_kind(media_type, filename, extension, url),
+      url: url,
+      filename: filename,
+      media_type: media_type,
       size_bytes: map_get(file, ["size", :size]),
       width: map_get(file, ["width", :width]),
       height: map_get(file, ["height", :height]),
       metadata:
         %{
           file_id: map_get(file, ["id", :id]),
-          extension: map_get(file, ["extension", :extension])
+          extension: extension
         }
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
@@ -410,6 +416,31 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(_), do: nil
+
+  defp mattermost_media_kind(media_type, filename, extension, url) do
+    reference =
+      cond do
+        is_binary(filename) and Path.extname(filename) != "" ->
+          filename
+
+        is_binary(extension) and String.trim(extension, ".") != "" ->
+          "file." <> String.trim(extension, ".")
+
+        true ->
+          filename || url
+      end
+
+    Media.new(%{media_type: media_type, filename: reference, url: url}).kind
+  end
+
+  defp normalize_media_type(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_media_type(_value), do: nil
 
   defp upload_input(%FileUpload{path: path} = upload) when is_binary(path) and path != "" do
     {:ok,

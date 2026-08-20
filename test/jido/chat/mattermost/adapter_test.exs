@@ -286,6 +286,22 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
                 "name" => "photo.png",
                 "mime_type" => "image/png",
                 "link" => "https://mm.example.com/file/1"
+              },
+              %{
+                "name" => "fallback.png",
+                "mime_type" => nil,
+                "link" => "https://mm.example.com/file/2"
+              },
+              %{
+                "name" => "extensionless",
+                "extension" => "png",
+                "mime_type" => " ",
+                "link" => "https://mm.example.com/file/3"
+              },
+              %{
+                "name" => "archive.unknown",
+                "mime_type" => nil,
+                "link" => "https://mm.example.com/file/4"
               }
             ]
           }
@@ -294,10 +310,20 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       }
 
       assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
-      assert [media] = incoming.media
-      assert media.filename == "photo.png"
-      assert media.media_type == "image/png"
-      assert media.url == "https://mm.example.com/file/1"
+      assert [explicit, filename_fallback, extension_fallback, unknown] = incoming.media
+      assert explicit.filename == "photo.png"
+      assert explicit.media_type == "image/png"
+      assert explicit.url == "https://mm.example.com/file/1"
+
+      assert filename_fallback.kind == :image
+      assert filename_fallback.media_type == nil
+
+      assert extension_fallback.kind == :image
+      assert extension_fallback.media_type == nil
+      assert extension_fallback.metadata.extension == "png"
+
+      assert unknown.kind == :file
+      assert unknown.media_type == nil
     end
 
     test "flat outgoing-webhook payload is normalised" do
