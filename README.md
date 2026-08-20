@@ -65,6 +65,10 @@ alias Jido.Chat.Mattermost.Adapter
     caption: "Latest report"
   )
 
+# Download an inbound attachment
+[media | _] = incoming.media
+{:ok, bytes} = Adapter.fetch_media(media, token: "my-token")
+
 # Edit a message
 {:ok, updated} = Adapter.edit_message("ch001", "post-id", "updated text", token: "my-token")
 
@@ -138,6 +142,7 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 | fetch channel metadata | native |
 | fetch thread | native |
 | fetch message by ID | native |
+| fetch media | native |
 | add reaction | native |
 | remove reaction | native |
 | fetch messages (history) | native |
@@ -148,3 +153,6 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 | modal | unsupported |
 | webhook ingress | unsupported |
 | send file | native |
+
+Downloading private attachments requires the bot to have permission to read the
+channel containing the file.

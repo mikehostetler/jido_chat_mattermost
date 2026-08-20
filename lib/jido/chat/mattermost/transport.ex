@@ -12,6 +12,9 @@ defmodule Jido.Chat.Mattermost.Transport do
   @callback upload_file(channel_id :: String.t(), file :: map(), opts :: keyword()) ::
               {:ok, map()} | {:error, term()}
 
+  @callback download_file(file_id :: String.t(), opts :: keyword()) ::
+              {:ok, binary()} | {:error, term()}
+
   @callback edit_message(
               channel_id :: String.t(),
               post_id :: String.t(),
