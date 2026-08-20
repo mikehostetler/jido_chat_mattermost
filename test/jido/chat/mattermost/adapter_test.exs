@@ -294,7 +294,7 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
               },
               %{
                 "name" => "extensionless",
-                "extension" => "png",
+                "extension" => " .PNG ",
                 "mime_type" => " ",
                 "link" => "https://mm.example.com/file/3"
               },
@@ -302,6 +302,17 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
                 "name" => "archive.unknown",
                 "mime_type" => nil,
                 "link" => "https://mm.example.com/file/4"
+              },
+              %{
+                "name" => " ",
+                "mime_type" => nil,
+                "link" => " ",
+                "permalink" => "https://mm.example.com/files/photo.PNG?token=signed"
+              },
+              %{
+                "name" => "misleading.png",
+                "mime_type" => " application/pdf; charset=binary ",
+                "link" => "https://mm.example.com/file/6"
               }
             ]
           }
@@ -310,7 +321,10 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       }
 
       assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
-      assert [explicit, filename_fallback, extension_fallback, unknown] = incoming.media
+
+      assert [explicit, filename_fallback, extension_fallback, unknown, signed_url, misleading] =
+               incoming.media
+
       assert explicit.filename == "photo.png"
       assert explicit.media_type == "image/png"
       assert explicit.url == "https://mm.example.com/file/1"
@@ -320,10 +334,17 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
       assert extension_fallback.kind == :image
       assert extension_fallback.media_type == nil
-      assert extension_fallback.metadata.extension == "png"
+      assert extension_fallback.metadata.extension == " .PNG "
 
       assert unknown.kind == :file
       assert unknown.media_type == nil
+
+      assert signed_url.kind == :image
+      assert signed_url.url == "https://mm.example.com/files/photo.PNG?token=signed"
+      assert signed_url.filename == nil
+
+      assert misleading.kind == :file
+      assert misleading.media_type == "application/pdf; charset=binary"
     end
 
     test "flat outgoing-webhook payload is normalised" do
