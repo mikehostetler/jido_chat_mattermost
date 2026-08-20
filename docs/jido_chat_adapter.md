@@ -131,6 +131,7 @@ Capability key → callback mapping:
 | `:fetch_metadata` | `fetch_metadata` | 2 |
 | `:fetch_thread` | `fetch_thread` | 2 |
 | `:fetch_message` | `fetch_message` | 3 |
+| `:fetch_media` | `fetch_media` | 2 |
 | `:add_reaction` | `add_reaction` | 4 |
 | `:remove_reaction` | `remove_reaction` | 4 |
 | `:post_ephemeral` | `post_ephemeral` | 4 |
@@ -225,6 +226,20 @@ Fallback: returns a minimal `%Thread{id: "mattermost:#{room_id}"}`.
 ```
 
 Fallback: `{:error, :unsupported}`
+
+---
+
+### `fetch_media/2`
+
+```elixir
+@callback fetch_media(reference :: String.t() | Media.t() | map(), opts) ::
+  {:ok, binary()} | {:error, term()}
+```
+
+Fetches the raw bytes behind an inbound media reference minted by the adapter.
+Mattermost accepts a raw file ID, a `mattermost://file/<file_id>` reference, a
+normalized media value carrying `metadata.file_id`, or a Mattermost
+`/api/v4/files/<file_id>` URL. Fallback: `{:error, :unsupported}`.
 
 ---
 

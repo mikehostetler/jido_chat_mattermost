@@ -27,6 +27,8 @@ defmodule Jido.Chat.Mattermost.Channel do
   defdelegate fetch_thread(root_id, opts), to: Adapter
   @doc "Fetches a Mattermost post by channel and post id."
   defdelegate fetch_message(channel_id, post_id, opts), to: Adapter
+  @doc "Fetches the bytes behind a Mattermost media reference."
+  defdelegate fetch_media(reference, opts), to: Adapter
   @doc "Adds a reaction to a Mattermost post."
   defdelegate add_reaction(channel_id, post_id, emoji, opts), to: Adapter
   @doc "Removes a reaction from a Mattermost post."

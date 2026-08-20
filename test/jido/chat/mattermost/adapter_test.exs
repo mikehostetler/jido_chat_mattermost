@@ -1,7 +1,7 @@
 defmodule Jido.Chat.Mattermost.AdapterTest do
   use ExUnit.Case, async: true
 
-  alias Jido.Chat.{Adapter, ChannelInfo, FileUpload, Mention, PostPayload, Response, Thread}
+  alias Jido.Chat.{Adapter, ChannelInfo, FileUpload, Media, Mention, PostPayload, Response, Thread}
   alias Jido.Chat.Mattermost.Adapter, as: MattermostAdapter
 
   # ---------------------------------------------------------------------------
@@ -40,6 +40,16 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
            }
          ]
        }}
+    end
+
+    @impl true
+    def download_file(file_id, opts) do
+      send(self(), {:download_file, file_id, opts})
+
+      case file_id do
+        "missing" -> {:error, {404, "not found"}}
+        _file_id -> {:ok, "mattermost file bytes"}
+      end
     end
 
     @impl true
@@ -300,6 +310,28 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       assert media.url == "https://mm.example.com/file/1"
     end
 
+    test "message files without links receive adapter-owned references" do
+      payload = %{
+        "post" => %{
+          "id" => "p6",
+          "user_id" => "u1",
+          "channel_id" => "c1",
+          "message" => "see attached",
+          "metadata" => %{
+            "files" => [
+              %{"id" => "file_456", "name" => "report.pdf", "mime_type" => "application/pdf"}
+            ]
+          }
+        },
+        "channel_type" => "O"
+      }
+
+      assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+      assert [media] = incoming.media
+      assert media.url == "mattermost://file/file_456"
+      assert media.metadata.file_id == "file_456"
+    end
+
     test "flat outgoing-webhook payload is normalised" do
       payload = %{
         "token" => "tok",
@@ -381,11 +413,49 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
       assert caps.send_message == :native
       assert caps.send_file == :native
+      assert caps.fetch_media == :native
       assert caps.post_message == :fallback
       assert caps.open_dm == :native
       assert caps.open_thread == :native
 
       assert :ok = Jido.Chat.Adapter.validate_capabilities(MattermostAdapter)
+    end
+  end
+
+  describe "fetch_media/2" do
+    test "downloads raw IDs and adapter-owned references" do
+      assert {:ok, "mattermost file bytes"} =
+               MattermostAdapter.fetch_media("file_123", fake_opts())
+
+      assert_received {:download_file, "file_123", _opts}
+
+      assert {:ok, "mattermost file bytes"} =
+               MattermostAdapter.fetch_media("mattermost://file/file_456", fake_opts())
+
+      assert_received {:download_file, "file_456", _opts}
+    end
+
+    test "downloads normalized media and Mattermost API URLs" do
+      media = Media.new(%{url: "mattermost://file/file_789", metadata: %{file_id: "file_789"}})
+
+      assert {:ok, "mattermost file bytes"} = MattermostAdapter.fetch_media(media, fake_opts())
+      assert_received {:download_file, "file_789", _opts}
+
+      assert {:ok, "mattermost file bytes"} =
+               MattermostAdapter.fetch_media(
+                 "https://mattermost.example.com/api/v4/files/file_abc",
+                 fake_opts()
+               )
+
+      assert_received {:download_file, "file_abc", _opts}
+    end
+
+    test "rejects invalid references and propagates transport errors" do
+      assert {:error, :invalid_media_reference} =
+               MattermostAdapter.fetch_media("https://example.com/private.txt", fake_opts())
+
+      assert {:error, :invalid_media_reference} = MattermostAdapter.fetch_media(%{}, fake_opts())
+      assert {:error, {404, "not found"}} = MattermostAdapter.fetch_media("missing", fake_opts())
     end
   end
 

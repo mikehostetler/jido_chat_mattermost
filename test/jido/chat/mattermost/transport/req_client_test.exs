@@ -8,6 +8,7 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
   @url System.get_env("MATTERMOST_URL", "")
   @token System.get_env("MATTERMOST_TOKEN", "")
   @channel_id System.get_env("MATTERMOST_CHANNEL_ID", "")
+  @file_id System.get_env("MATTERMOST_FILE_ID", "")
 
   alias Jido.Chat.Mattermost.Transport.ReqClient
 
@@ -29,5 +30,10 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
   test "fetch_channel/2 returns channel metadata" do
     assert {:ok, channel} = ReqClient.fetch_channel(@channel_id, opts())
     assert is_binary(channel["id"])
+  end
+
+  test "download_file/2 returns attachment bytes" do
+    assert {:ok, bytes} = ReqClient.download_file(@file_id, opts())
+    assert is_binary(bytes) and byte_size(bytes) > 0
   end
 end
