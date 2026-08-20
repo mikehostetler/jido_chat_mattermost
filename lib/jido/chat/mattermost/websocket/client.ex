@@ -9,15 +9,22 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
 
       apply(module, function, extra_args ++ [payload, sink_opts])
 
+  `reaction_added` and `reaction_removed` events are forwarded as a normalized
+  `%Jido.Chat.EventEnvelope{event_type: :reaction}` instead of a raw map, since
+  `transform_incoming/2` has no reaction representation to normalize into.
+
   ## Flow
 
       Mattermost WS frame
         → handle_in/2 (decode + filter, ~1ms)
-          → raw payload map (post + channel metadata)
+          → posted:   raw payload map (post + channel metadata)
+          → reaction: %Jido.Chat.EventEnvelope{event_type: :reaction}
           → apply(sink_module, sink_fun, sink_args ++ [payload, sink_opts])
   """
 
   use Fresh
+
+  alias Jido.Chat.EventEnvelope
 
   require Logger
 
@@ -127,6 +134,17 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
     {:ok, state}
   end
 
+  defp handle_non_auth_event(%{"event" => reaction_event} = event, state)
+       when reaction_event in ["reaction_added", "reaction_removed"] do
+    state =
+      case handle_reaction(event, reaction_event == "reaction_added", state) do
+        :dispatched -> auth_success_fallback(state)
+        _ignored -> state
+      end
+
+    {:ok, state}
+  end
+
   defp handle_non_auth_event(_event, state), do: {:ok, state}
 
   defp classify_auth_status(%{"seq_reply" => 1} = event) do
@@ -195,6 +213,87 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   end
 
   defp decode_post(_), do: {:error, :missing_post}
+
+  # Mattermost nests the reaction as a JSON string under `data.reaction`, the
+  # same way it nests posts, and only carries the channel on the broadcast.
+  defp handle_reaction(event, added, state) do
+    data = Map.get(event, "data") || %{}
+    channel_id = broadcast_channel_id(event)
+
+    with {:ok, reaction} <- decode_reaction(data),
+         post <- reaction_as_post(reaction, channel_id),
+         true <- not_bot?(post, state),
+         true <- in_tracked_channel?(post, Map.get(data, "channel_type"), state) do
+      emit_reaction_event(event, reaction, channel_id, added, state)
+    else
+      _ -> :ignored
+    end
+  end
+
+  defp decode_reaction(%{"reaction" => reaction_json}) when is_binary(reaction_json) do
+    case Jason.decode(reaction_json) do
+      {:ok, reaction} when is_map(reaction) -> {:ok, reaction}
+      {:ok, _other} -> {:error, :invalid_reaction}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp decode_reaction(%{"reaction" => reaction}) when is_map(reaction), do: {:ok, reaction}
+
+  defp decode_reaction(_), do: {:error, :missing_reaction}
+
+  # Lets reactions reuse the bot and tracked-channel filters built for posts.
+  defp reaction_as_post(reaction, channel_id) do
+    %{"user_id" => Map.get(reaction, "user_id"), "channel_id" => channel_id}
+  end
+
+  defp broadcast_channel_id(event) do
+    event
+    |> Map.get("broadcast", %{})
+    |> case do
+      broadcast when is_map(broadcast) -> Map.get(broadcast, "channel_id")
+      _ -> nil
+    end
+  end
+
+  defp emit_reaction_event(event, reaction, channel_id, added, state) do
+    post_id = Map.get(reaction, "post_id")
+    user_id = Map.get(reaction, "user_id")
+    emoji = Map.get(reaction, "emoji_name")
+    thread_id = "mattermost:#{channel_id}"
+
+    envelope =
+      EventEnvelope.new(%{
+        adapter_name: :mattermost,
+        event_type: :reaction,
+        thread_id: thread_id,
+        channel_id: channel_id,
+        message_id: post_id,
+        payload: %{
+          adapter_name: :mattermost,
+          thread_id: thread_id,
+          channel_id: channel_id,
+          message_id: post_id,
+          emoji: emoji,
+          added: added,
+          user: %{user_id: user_id},
+          raw: reaction,
+          metadata: %{channel_id: channel_id}
+        },
+        raw: event,
+        metadata: %{source: :websocket, ws_event: Map.get(event, "event")}
+      })
+
+    sink_opts = Keyword.put(state.sink_opts, :transport, "websocket")
+    invoke_sink(state.sink_mfa, envelope, sink_opts)
+
+    Logger.info(
+      "[Mattermost WS] Reaction event dispatched post_id=#{post_id} " <>
+        "emoji=#{inspect(emoji)} added=#{added}"
+    )
+
+    :dispatched
+  end
 
   defp not_bot?(post, %{bot_user_id: bot_user_id}) when is_binary(bot_user_id) do
     post["user_id"] != bot_user_id
