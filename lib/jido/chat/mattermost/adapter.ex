@@ -26,8 +26,6 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   use Jido.Chat.Adapter
 
-  require Logger
-
   alias Jido.Chat.Mattermost.{
     DeleteOptions,
     EditOptions,
