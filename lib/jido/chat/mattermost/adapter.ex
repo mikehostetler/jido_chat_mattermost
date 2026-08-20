@@ -59,6 +59,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
       fetch_metadata: :native,
       fetch_thread: :native,
       fetch_message: :native,
+      fetch_media: :native,
       add_reaction: :native,
       remove_reaction: :native,
       fetch_messages: :native,
@@ -261,6 +262,15 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   @impl true
+  def fetch_media(reference, opts \\ []) do
+    o = FetchOptions.new(opts)
+
+    with {:ok, file_id} <- media_file_id(reference) do
+      transport(o).download_file(file_id, FetchOptions.transport_opts(o))
+    end
+  end
+
+  @impl true
   def open_thread(channel_id, post_id, opts \\ []) do
     o = FetchOptions.new(opts)
 
@@ -392,8 +402,12 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(file) when is_map(file) do
+    file_id = map_get(file, ["id", :id])
+
     Media.new(%{
-      url: map_get(file, ["link", :link, "permalink", :permalink]),
+      url:
+        map_get(file, ["link", :link, "permalink", :permalink]) ||
+          media_reference_url(file_id),
       filename: map_get(file, ["name", :name]),
       media_type: map_get(file, ["mime_type", :mime_type]),
       size_bytes: map_get(file, ["size", :size]),
@@ -410,6 +424,69 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(_), do: nil
+
+  defp media_file_id(%Media{url: url, metadata: metadata}) do
+    metadata
+    |> map_get([:file_id, "file_id"])
+    |> file_id_or_reference(url)
+  end
+
+  defp media_file_id(reference) when is_map(reference) do
+    metadata = map_get(reference, [:metadata, "metadata"]) || %{}
+
+    reference
+    |> map_get([:file_id, "file_id", :id, "id"])
+    |> Kernel.||(map_get(metadata, [:file_id, "file_id"]))
+    |> file_id_or_reference(map_get(reference, [:url, "url", :link, "link", :permalink, "permalink"]))
+  end
+
+  defp media_file_id(reference) when is_binary(reference), do: parse_media_reference(reference)
+  defp media_file_id(_reference), do: {:error, :invalid_media_reference}
+
+  defp file_id_or_reference(file_id, _reference) when is_binary(file_id) and file_id != "",
+    do: validate_file_id(file_id)
+
+  defp file_id_or_reference(_file_id, reference) when is_binary(reference),
+    do: parse_media_reference(reference)
+
+  defp file_id_or_reference(_file_id, _reference), do: {:error, :invalid_media_reference}
+
+  defp parse_media_reference("mattermost://file/" <> file_id), do: validate_file_id(file_id)
+
+  defp parse_media_reference(reference) do
+    case URI.parse(reference) do
+      %URI{scheme: scheme, path: path} when scheme in ["http", "https"] ->
+        file_id_from_api_path(path)
+
+      %URI{scheme: nil, path: path} ->
+        validate_file_id(path)
+
+      _uri ->
+        {:error, :invalid_media_reference}
+    end
+  end
+
+  defp file_id_from_api_path(path) when is_binary(path) do
+    case Regex.run(~r{/api/v4/files/([^/]+)$}, path, capture: :all_but_first) do
+      [file_id] -> validate_file_id(file_id)
+      _no_match -> {:error, :invalid_media_reference}
+    end
+  end
+
+  defp file_id_from_api_path(_path), do: {:error, :invalid_media_reference}
+
+  defp validate_file_id(file_id) when is_binary(file_id) do
+    if Regex.match?(~r/^[A-Za-z0-9_-]+$/, file_id) do
+      {:ok, file_id}
+    else
+      {:error, :invalid_media_reference}
+    end
+  end
+
+  defp media_reference_url(file_id) when is_binary(file_id) and file_id != "",
+    do: "mattermost://file/#{file_id}"
+
+  defp media_reference_url(_file_id), do: nil
 
   defp upload_input(%FileUpload{path: path} = upload) when is_binary(path) and path != "" do
     {:ok,

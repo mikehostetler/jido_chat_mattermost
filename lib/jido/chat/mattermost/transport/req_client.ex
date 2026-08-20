@@ -38,6 +38,17 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
   def upload_file(_channel_id, _file, _opts), do: {:error, :missing_file_source}
 
   @impl true
+  def download_file(file_id, opts) do
+    url = base_url(opts) <> "/api/v4/files/#{file_id}"
+
+    case Req.get(url, headers: auth_headers(opts), decode_body: false) do
+      {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
+      {:ok, %{status: status, body: resp_body}} -> {:error, {status, resp_body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def edit_message(_channel_id, post_id, text, opts) do
     put("/api/v4/posts/#{post_id}", %{"id" => post_id, "message" => text}, opts)
   end
